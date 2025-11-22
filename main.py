@@ -1,83 +1,92 @@
-
-import logging
 import os
-from typing import Any, Dict
-
-from flask import Flask, request, jsonify
+import logging
+import requests
+from flask import Flask, request
 
 from codex2050_engine import Codex2050Engine
+from codex2050_modes import handle_message
 
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger(__name__)
+logger = logging.getLogger("codex2050")
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TOKEN = os.environ.get("TELEGRAM_TOKEN")
+if not TOKEN:
+    # Hart abbrechen, weil ohne Token macht der Dienst keinen Sinn
+    raise RuntimeError("TELEGRAM_TOKEN ist nicht gesetzt.")
 
-if not TELEGRAM_TOKEN:
-    # Wir loggen nur – der Service kann trotzdem bauen, aber nicht sinnvoll antworten.
-    log.warning("TELEGRAM_TOKEN ist nicht gesetzt – Bot kann nicht mit Telegram sprechen.")
-
-TELEGRAM_API_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}" if TELEGRAM_TOKEN else None
+TELEGRAM_API = f"https://api.telegram.org/bot{TOKEN}"
 
 app = Flask(__name__)
 engine = Codex2050Engine()
 
+# sehr einfache In-Memory-States pro Chat-ID
+chat_states = {}
 
-def _telegram_request(method: str, payload: Dict[str, Any]) -> None:
-    """Sende eine Anfrage an die Telegram Bot API; Fehler werden nur geloggt."""
-    import requests  # lazy import, damit build schneller ist
-
-    if not TELEGRAM_API_BASE:
-        log.error("Kein TELEGRAM_TOKEN gesetzt, kann nicht zu Telegram senden.")
-        return
-
-    url = f"{TELEGRAM_API_BASE}/{method}"
-    try:
-        r = requests.post(url, json=payload, timeout=10)
-        if not r.ok:
-            log.error("Telegram API error %s: %s", r.status_code, r.text[:400])
-    except Exception as exc:  # pragma: no cover – defensive
-        log.error("Fehler beim Telegram-Request: %s", exc)
-
+def get_state(chat_id: int):
+    return chat_states.setdefault(chat_id, {})
 
 @app.route("/", methods=["GET"])
-def index() -> Any:
-    return "Codex2050 Render-Bot – alive", 200
-
+def index():
+    return "Codex2050 Render Bot – online (final3)."
 
 @app.route("/webhook", methods=["POST"])
-def telegram_webhook() -> Any:
-    update = request.get_json(force=True, silent=True) or {}
-    log.debug("Update: %s", update)
+def webhook():
+    data = request.get_json(force=True, silent=True) or {}
+    logger.info("Update: %s", data)
 
-    message = update.get("message") or update.get("edited_message")
+    message = data.get("message") or data.get("edited_message")
     if not message:
-        return jsonify(ok=True)
+        return "no message"
 
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
-    if not isinstance(chat_id, int):
-        return jsonify(ok=True)
+    text = message.get("text", "")
 
-    text = message.get("text") or ""
-    text = text.strip()
+    if chat_id is None:
+        return "no chat"
 
-    if text.startswith("/"):
-        if " " in text:
-            cmd, arg = text.split(" ", 1)
-        else:
-            cmd, arg = text, None
-        reply = engine.handle_command(chat_id, cmd, arg)
-    else:
-        reply = engine.handle_free_text(chat_id, text)
+    state = get_state(chat_id)
+    try:
+        reply = handle_message(text, engine, state)
+    except Exception as e:
+        logger.exception("Fehler in handle_message: %s", e)
+        reply = "Ich hatte intern einen Fehler. Versuch es bitte noch einmal in einfachen Sätzen."
 
-    _telegram_request("sendMessage", {"chat_id": chat_id, "text": reply})
-    return jsonify(ok=True)
+    send_message(chat_id, reply)
+    return "ok"
 
+def send_message(chat_id: int, text: str):
+    try:
+        resp = requests.post(
+            TELEGRAM_API + "/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": text,
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            logger.warning("sendMessage failed: %s %s", resp.status_code, resp.text)
+    except Exception as e:
+        logger.error("sendMessage exception: %s", e)
 
-def main() -> None:
-    port = int(os.environ.get("PORT", "10000"))
-    app.run(host="0.0.0.0", port=port)
-
+def set_webhook():
+    url = os.environ.get("WEBHOOK_URL")
+    if not url:
+        logger.warning("WEBHOOK_URL ist nicht gesetzt – kein automatisches setWebhook.")
+        return
+    try:
+        resp = requests.get(
+            TELEGRAM_API + "/setWebhook",
+            params={"url": url},
+            timeout=10,
+        )
+        logger.info("setWebhook: %s %s", resp.status_code, resp.text)
+    except Exception as e:
+        logger.error("setWebhook exception: %s", e)
 
 if __name__ == "__main__":
-    main()
+    # Beim direkten Start (z.B. lokal) einmalig Webhook setzen
+    set_webhook()
+    port = int(os.environ.get("PORT", "10000"))
+    app.run(host="0.0.0.0", port=port)

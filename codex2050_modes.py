@@ -1,96 +1,59 @@
+from typing import Optional
+from codex2050_engine import Codex2050Engine
 
-from dataclasses import dataclass
-from typing import Dict, List
+def detect_mode_from_text(text: str) -> Optional[int]:
+    t = text.strip().lower()
+    if t in {"/start", "start"}:
+        return None
+    # Zahl oder "stufe x"
+    for i in range(1, 7):
+        if t == str(i) or t.replace("stufe", "").strip() == str(i):
+            return i
+    return None
 
+def handle_message(text: str, engine: Codex2050Engine, state: dict) -> str:
+    """
+    Zentrale Routing-Funktion.
+    `state` ist ein einfaches Dict pro Chat (persistiert NICHT serverseitig – reiner RAM).
+    """
+    t = (text or "").strip()
 
-@dataclass
-class Mode:
-    key: str
-    title: str
-    short: str
-    description: str
+    # Start
+    if t.startswith("/start"):
+        state.clear()
+        return (
+            "Codex2050 Render‑Bot ist aktiv. 🔥\n\n"
+            + engine.list_stufen()
+        )
 
+    # Stufe wechseln?
+    mode = detect_mode_from_text(t)
+    if mode is not None:
+        state["mode"] = mode
+        if mode == 1:
+            state["awaiting_checkin"] = True
+            return engine.handle_checkin(t)
+        return engine.mode_reply(mode, t)
 
-def get_all_modes() -> Dict[str, Mode]:
-    """Return all defined Codex-2050 modes (Stufen 1–6)."""
-    modes: List[Mode] = [
-        Mode(
-            key="1",
-            title="Stufe 1 – Wahrnehmung",
-            short="Scannen & Benennen",
-            description=(
-                "Fokus auf klares Benennen der aktuellen Lage: Geld, Körper, Frauen, "
-                "Energie. Keine Bewertung, nur ehrliche Beobachtung in einfachen Sätzen."
-            ),
-        ),
-        Mode(
-            key="2",
-            title="Stufe 2 – Struktur",
-            short="Ordnen & Priorisieren",
-            description=(
-                "Aus der Roh-Wahrnehmung werden 3–5 Prioritäten gebaut. "
-                "Was braucht heute als erstes Energie? Was kann warten?"
-            ),
-        ),
-        Mode(
-            key="3",
-            title="Stufe 3 – Handlung",
-            short="Konkrete Schritte",
-            description=(
-                "Konkrete, kleine Schritte für die nächsten 12–24 Stunden. "
-                "Kein Perfektionismus, nur Bewegung: Telefonate, Nachrichten, "
-                "1–2 Tasks für Geld/Business, 1 Task für Körper."
-            ),
-        ),
-        Mode(
-            key="4",
-            title="Stufe 4 – Schutz",
-            short="Dunkelblauer Modus",
-            description=(
-                "Prüfung, was dich heute zerstören oder ausbrennen könnte "
-                "(Menschen, Nachrichten, Social Media, Alkohol, Eskalation) "
-                "und wie du das minimierst."
-            ),
-        ),
-        Mode(
-            key="5",
-            title="Stufe 5 – Echo",
-            short="Spiegel & Feedback",
-            description=(
-                "Hier werden Echos gesammelt: Was kam zurück? Antworten, Absagen, "
-                "Zufälle, Körpersignale. Kein Drama, nur Daten für den nächsten Tag."
-            ),
-        ),
-        Mode(
-            key="6",
-            title="Stufe 6 – Imperator",
-            short="Langstrecke 2050",
-            description=(
-                "Hier geht es um 2050-Linie: Was bleibt von heute in 1 Jahr wichtig? "
-                "Was ist nur Lärm? Fokus auf Vision, nicht auf kurzfristige Panik."
-            ),
-        ),
-    ]
-    return {m.key: m for m in modes}
+    # Kontextabhängige Antworten
+    current_mode = state.get("mode")
 
+    # Stufe 1: nach dem ersten Prompt die Antwort spiegeln
+    if current_mode == 1 and state.get("awaiting_checkin"):
+        state["awaiting_checkin"] = False
+        return engine.reflect_checkin_answer(t)
 
-def format_modes_list() -> str:
-    modes = get_all_modes()
-    lines = ["Stufen 1–6 (Codex-2050-Modus):"]
-    for m in modes.values():
-        lines.append(f"{m.key}. {m.title} – {m.short}")
-    lines.append("")
-    lines.append("Nutze /mode <1-6>, z.B.: /mode 3")
-    return "\n".join(lines)
+    # Stufe 5: Archiv – Stichworte sortieren
+    if current_mode == 5:
+        parts = [p.strip() for p in t.split(",") if p.strip()]
+        if not parts:
+            return "Gib ein paar Stichworte, getrennt durch Kommas."
+        parts_sorted = sorted(parts, key=lambda x: x.lower())
+        bullet_list = "\n".join(f"- {p}" for p in parts_sorted)
+        return "Archiv‑Eintrag:\n\n" + bullet_list
 
-
-def format_mode_detail(key: str) -> str:
-    modes = get_all_modes()
-    mode = modes.get(key)
-    if not mode:
-        return "Unbekannte Stufe. Nutze /stufen für eine Übersicht."
+    # Default-Fallback: einfach erneut Stufenliste ausgeben
     return (
-        f"{mode.title}\n"
-        f"{'-'*len(mode.title)}\n"
-        f"{mode.description}"
+        "Ich habe dich verstanden, aber ordne es gerade keiner Stufe zu.\n\n"
+        + engine.list_stufen()
     )
