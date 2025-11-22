@@ -1,166 +1,128 @@
 
-import json
+"""Kleiner Logik-Kern für den Codex2050 Render-Bot.
+
+Wichtig:
+- Kein externer API-Zwang (läuft also auch ohne OpenAI-Key).
+- Pro Nutzer wird nur minimaler Zustand im RAM gehalten.
+"""
+
+from __future__ import annotations
+
 import logging
-import os
-import re
-import time
-from typing import Dict, Any, List
+from dataclasses import dataclass, field
+from typing import Dict, Optional
 
-from codex2050_modes import Codex2050Config
+from codex2050_modes import format_modes_list, format_mode_detail
 
-logger = logging.getLogger(__name__)
-
-# einfache In-Memory-Rate-Limit-Struktur
-_rate_limit_state: Dict[int, List[float]] = {}
+log = logging.getLogger(__name__)
 
 
-SCAM_PATTERNS = [
-    r"premium_gift",
-    r"free\s+telegram\s+premium",
-    r"ordershunter",
-    r"crypto\s+giveaway",
-]
+@dataclass
+class UserState:
+    mode: str = "1"   # Default: Stufe 1
+    last_prompt: Optional[str] = None
+    notes: Dict[str, str] = field(default_factory=dict)
 
 
-def _looks_like_scam(text: str) -> bool:
-    t = text.lower()
-    for pattern in SCAM_PATTERNS:
-        if re.search(pattern, t):
-            return True
-    return False
+class Codex2050Engine:
+    """Very small in-memory engine.
 
+    Das hier ist absichtlich simpel gehalten:
+    - Kein DB, nur ein Dictionary pro Prozess.
+    - Für unser Ziel reicht das komplett.
+    """
 
-def _check_rate_limit(user_id: int, window_seconds: int = 30, max_msgs: int = 6) -> bool:
-    # True = OK, False = zu viele Nachrichten
-    now = time.time()
-    history = _rate_limit_state.get(user_id, [])
-    history = [ts for ts in history if now - ts < window_seconds]
-    history.append(now)
-    _rate_limit_state[user_id] = history
-    return len(history) <= max_msgs
+    def __init__(self) -> None:
+        self._users: Dict[int, UserState] = {}
 
+    # --- intern -------------------------------------------------------------
 
-def _archiv_log(entry: Dict[str, Any]) -> None:
-    try:
-        line = json.dumps(entry, ensure_ascii=False)
-        with open("codex2050_log.txt", "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception as e:
-        logger.warning("Archiv-Log Fehler: %s", e)
+    def _get_state(self, user_id: int) -> UserState:
+        if user_id not in self._users:
+            self._users[user_id] = UserState()
+        return self._users[user_id]
 
+    # --- öffentliche API ----------------------------------------------------
 
-def _call_openai(prompt: str) -> str:
-    try:
-        from openai import OpenAI
+    def handle_command(self, user_id: int, command: str, arg: Optional[str]) -> str:
+        state = self._get_state(user_id)
+        command = command.lower()
 
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        if not api_key:
-            return "Stufe 6 (Full‑AI) ist vorbereitet, aber es wurde kein OPENAI_API_KEY gesetzt."
+        if command in ("/start", "start"):
+            return self._handle_start(state)
 
-        client = OpenAI(api_key=api_key)
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Du bist der interaktive Kern von Codex2050. Antworte kurz, klar und hilfreich auf Deutsch.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=350,
+        if command in ("/help", "help"):
+            return self._handle_help()
+
+        if command in ("/stufen", "/modes", "stufen"):
+            return format_modes_list()
+
+        if command == "/mode":
+            if not arg:
+                return "Welche Stufe? Beispiel: /mode 3"
+            return self._handle_set_mode(state, arg.strip())
+
+        if command == "/status":
+            return self._handle_status(state)
+
+        # Fallback
+        return "Unbekannter Befehl. Nutze /help für eine Übersicht."
+
+    def handle_free_text(self, user_id: int, text: str) -> str:
+        state = self._get_state(user_id)
+        state.last_prompt = text.strip()
+        # Speichere pro Stufe eine letzte Notiz
+        state.notes[state.mode] = text.strip()
+
+        base = (
+            f"🧠 Eingang registriert in Stufe {state.mode}.
+"
+            f"Dein Text bleibt im lokalen 2050-Puffer für diesen Lauf.
+
+"
+            f"Wenn du die Stufe wechseln willst: /stufen oder /mode <1-6>.
+"
+            f"Status anzeigen: /status"
         )
-        return resp.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error("OpenAI Fehler: %s", e)
-        return "Full‑AI-Brücke ist aktiv, aber es gab einen Fehler beim Zugriff auf das OpenAI‑API."
+        return base
 
+    # --- konkrete Handler ---------------------------------------------------
 
-def process_update(update: Dict[str, Any], cfg: Codex2050Config) -> List[str]:
-    # Nimmt ein Telegram-Update (JSON) und gibt eine Liste von Antwort-Texten zurück.
-    messages: List[str] = []
-
-    if "message" not in update:
-        return messages
-
-    msg = update["message"]
-    chat_id = msg.get("chat", {}).get("id")
-    user_id = msg.get("from", {}).get("id")
-    text = msg.get("text") or ""
-
-    # Stage 4: Archiv-Hook
-    if cfg.stage4_archiv_hook:
-        _archiv_log(
-            {
-                "ts": int(time.time()),
-                "chat_id": chat_id,
-                "user_id": user_id,
-                "text": text,
-                "stage": cfg.stage,
-            }
+    def _handle_start(self, state: UserState) -> str:
+        return (
+            "Codex2050 Render-Bot ist aktiv. 🔥\n\n"
+            "Ich arbeite in 6 Stufen (1–6) – alle lokal, ohne Cloud-Logik.\n"
+            "Du kannst jederzeit einfache Sätze senden – ich ordne sie in die "
+            "aktuelle Stufe ein.\n\n"
+            + format_modes_list()
         )
 
-    # Stage 5: Rate-Limit
-    if cfg.stage5_monitoring and user_id is not None:
-        ok = _check_rate_limit(int(user_id))
-        if not ok:
-            return ["Langsam, Bruder. Der Codex will, dass du kurz durchatmest. 🫠"]
+    def _handle_help(self) -> str:
+        return (
+            "Befehle:\n"
+            "/start – Übersicht & Einstieg\n"
+            "/stufen – Liste der Stufen 1–6\n"
+            "/mode <1-6> – Stufe wechseln (z.B. /mode 4)\n"
+            "/status – Aktuellen Modus + letzte Notizen anzeigen\n"
+            "\n"
+            "Alles andere wird als freier Text in die aktuelle Stufe geschrieben."
+        )
 
-    # /start
-    if text.startswith("/start") and cfg.stage1_online_echo:
-        intro = [
-            "Codex2050 Render‑Bot ist online. 🔥",
-            f"Aktive Stufe: {cfg.stage}",
-        ]
-        if cfg.stage6_full_ai:
-            intro.append("Full‑AI‑Bridge ist scharf. Du kannst mir jede Frage stellen.")
-        else:
-            intro.append("Du kannst mir schreiben – der Bot filtert, spiegelt und antwortet im 2050‑Modus.")
-        messages.append("\n".join(intro))
-        return messages
+    def _handle_set_mode(self, state: UserState, raw: str) -> str:
+        key = raw.strip()
+        if key not in {str(i) for i in range(1, 7)}:
+            return "Bitte eine Zahl von 1–6 wählen. Beispiel: /mode 2"
 
-    # Stage 2: Schutzfilter
-    if cfg.stage2_protection_filter and text:
-        if _looks_like_scam(text):
-            return [
-                "Dieser Link riecht nach Scam. ❌\n"
-                "Codex2050 hat ihn blockiert, damit dein Chat sauber bleibt."
-            ]
+        state.mode = key
+        detail = format_mode_detail(key)
+        return (
+            f"Stufe gewechselt auf {key}.\n\n"
+            f"{detail}\n\n"
+            "Schreib in einfachen Sätzen, ich sortiere es in diese Stufe."
+        )
 
-    # Stage 3: einfache Auto-Kommandos
-    if cfg.stage3_auto_reply:
-        lower = text.lower().strip()
-        if lower in {"/help", "hilfe", "was kannst du", "menu"}:
-            messages.append(
-                "Ich bin der Codex2050‑Render‑Bot.\n"
-                "– Stufe 1: Echo & Online‑Check\n"
-                "– Stufe 2: Scam‑Filter\n"
-                "– Stufe 3: einfache Auto‑Antworten\n"
-                "– Stufe 4: Archiv‑Log\n"
-                "– Stufe 5: Monitoring\n"
-                "– Stufe 6: Full‑AI‑Bridge (OpenAI)\n"
-                "Schreib mir einfach – ich sortiere den Rest."
-            )
-            return messages
-
-        if lower in {"/status", "status"}:
-            ai = "aktiv" if cfg.stage6_full_ai else "bereit, aber kein API‑Key"
-            messages.append(
-                f"Status:\nStufe: {cfg.stage}\nFull‑AI‑Bridge: {ai}\n"
-                "Logfile: codex2050_log.txt (falls Stufe ≥ 4)."
-            )
-            return messages
-
-    # Stage 6: Full‑AI‑Bridge
-    if cfg.stage6_full_ai and text:
-        answer = _call_openai(text)
-        messages.append(answer)
-        return messages
-
-    # Standard‑Echo (Stage 1)
-    if cfg.stage1_online_echo and text:
-        messages.append(f"ECHO 2050: {text}")
-        return messages
-
-    # Fallback – sollte selten vorkommen
-    messages.append("Codex2050 hat nichts zu sagen, aber ist wach. 👁️")
-    return messages
+    def _handle_status(self, state: UserState) -> str:
+        detail = format_mode_detail(state.mode)
+        note = state.notes.get(state.mode)
+        extra = f"\n\nLetzte Notiz in dieser Stufe:\n{note}" if note else ""
+        return f"Aktuelle Stufe: {state.mode}\n\n{detail}{extra}"

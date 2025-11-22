@@ -3,13 +3,7 @@ services:
   - type: web
     name: codex2050-render-final
     env: python
-    plan: starter
+    plan: starter  # free tier sollte reichen
+    region: frankfurt
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn main:app --bind 0.0.0.0:$PORT"
-    envVars:
-      - key: TELEGRAM_TOKEN
-        sync: false
-      - key: CODEX2050_STAGE
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
+    startCommand: "python main.py"
