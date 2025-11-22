@@ -1,24 +1,34 @@
-
-from fastapi import FastAPI, Request
-import httpx
 import os
+import logging
+from flask import Flask, request
+import telebot
 
-app = FastAPI()
+logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = "8382425226:AAETkrUYDXJA39PekDhs_Iyxnl1LhRSwaYQ"
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+bot = telebot.TeleBot(TOKEN, threaded=False)
 
-@app.post("/")
-async def telegram_webhook(request: Request):
-    data = await request.json()
-    if "message" in data and "text" in data["message"]:
-        chat_id = data["message"]["chat"]["id"]
-        text = data["message"]["text"]
+app = Flask(__name__)
 
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                f"{TELEGRAM_API}/sendMessage",
-                json={"chat_id": chat_id, "text": f"Sancho 2050 empfängt: {text}"}
-            )
+@app.route("/", methods=["GET"])
+def home():
+    return "Codex2050 Render Bot läuft."
 
-    return {"ok": True}
+@app.route("/", methods=["POST"])
+def webhook():
+    json_update = request.stream.read().decode("utf-8")
+    update = telebot.types.Update.de_json(json_update)
+    bot.process_new_updates([update])
+    return "OK", 200
+
+@bot.message_handler(commands=["start"])
+def start_msg(message):
+    bot.reply_to(message, "Codex2050 Render-Bot ist aktiv 🔥")
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    hostname = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+    WEBHOOK_URL = f"https://{hostname}/"
+    bot.remove_webhook()
+    bot.set_webhook(url=WEBHOOK_URL)
+    app.run(host="0.0.0.0", port=port)

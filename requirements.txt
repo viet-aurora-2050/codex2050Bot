@@ -1,3 +1,3 @@
-fastapi
-uvicorn[standard]
-httpx
+Flask==2.3.3
+pyTelegramBotAPI==4.17.0
+gunicorn==21.2.0
