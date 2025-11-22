@@ -1,11 +1,15 @@
+
 services:
   - type: web
     name: codex2050-render-final
     env: python
+    plan: starter
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python main.py"
+    startCommand: "gunicorn main:app --bind 0.0.0.0:$PORT"
     envVars:
       - key: TELEGRAM_TOKEN
         sync: false
-      - key: PORT
-        value: 10000
+      - key: CODEX2050_STAGE
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
