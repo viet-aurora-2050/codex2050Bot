@@ -1,2 +1,3 @@
-from app import app
-# Entrypoint for Render
+# main.py
+
+# Placeholder for main.py

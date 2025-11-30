@@ -1,6 +1,3 @@
-services:
-  - type: web
-    name: codex2050-bot
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+# render.yaml
+
+# Placeholder for render.yaml
