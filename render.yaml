@@ -1,10 +1,7 @@
-
 services:
   - type: web
     name: codex2050
     env: python
+    plan: free
     buildCommand: ""
-    startCommand: "python app.py"
-    envVars:
-      - key: FLASK_ENV
-        value: production
+    startCommand: "python main.py"

@@ -1,4 +1,3 @@
+# Codex2050 Render Dashboard v2
 
-# Codex2050 Render Dashboard
-
-Dies ist das finale Deployment-Paket für Codex2050 mit integriertem Dashboard.
+Dies ist die finale ZIP für das Codex2050-Dashboard inkl. Bot-Integration (Telegram) und HTML-GUI.

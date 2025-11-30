@@ -1,10 +1,17 @@
+from flask import Flask, request, render_template
+import logging
 
-from flask import Flask, render_template
 app = Flask(__name__)
 
 @app.route('/')
-def dashboard():
-    return "<h1>Codex2050 Dashboard online.</h1>"
+def index():
+    return render_template('dashboard.html')
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    data = request.json
+    app.logger.info(f"Webhook empfangen: {data}")
+    return {'status': 'ok'}
 
 if __name__ == '__main__':
     app.run()
