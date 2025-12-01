@@ -1,3 +1,1 @@
-# app.py
-
-# Placeholder for app.py
+print('Binance Recovery Bot')
